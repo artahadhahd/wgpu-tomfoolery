@@ -33,18 +33,16 @@ impl Vertex {
 
 
 static VERTICES: &[Vertex] = &[
-    Vertex {
-        position: [0.0, 0.5, 0.0],
-        color: [1.0, 0.0, 0.0],
-    },
-    Vertex {
-        position: [-0.5, -0.5, 0.0],
-        color: [0.0, 1.0, 0.0],
-    },
-    Vertex {
-        position: [0.5, -0.5, 0.0],
-        color: [0.0, 0.0, 1.0],
-    },
+    Vertex { position: [-0.5, 0.0, 0.0], color: [0.5, 0.0, 0.5] }, // A
+    Vertex { position: [0.0, 0.0, 0.0], color: [0.5, 0.0, 0.5] }, // B
+    Vertex { position: [0.0, 0.5, 0.0], color: [0.5, 0.0, 0.5] }, // C
+    Vertex { position: [-0.5, 0.5, 0.0], color: [0.5, 0.0, 0.5] }, // D
+    // Vertex { position: [0.44147372, 0.2347359, 0.0], color: [0.5, 0.0, 0.5] }, // E
+];
+
+const INDICES: &[u16] = &[
+    0, 1, 2,
+    0, 2, 3,
 ];
 
 struct State {
@@ -58,7 +56,9 @@ struct State {
     current_key: ScanCode,
     pipe_line: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
     num_verticies: u32,
+    num_indices: u32,
 }
 
 impl State {
@@ -185,7 +185,16 @@ impl State {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
+        let index_buffer = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Index Buffer"),
+                contents: bytemuck::cast_slice(INDICES),
+                usage: wgpu::BufferUsages::INDEX,
+            }
+        );
+
         let num_vertices = VERTICES.len() as u32;
+        let num_indices = INDICES.len() as u32;
 
         Self {
             surface,
@@ -203,7 +212,9 @@ impl State {
             current_key: 0,
             pipe_line: render_pipeline,
             vertex_buffer,
+            index_buffer: index_buffer,
             num_verticies: num_vertices,
+            num_indices: num_indices,
         }
     }
 
@@ -274,7 +285,10 @@ impl State {
 
         render_pass.set_pipeline(&self.pipe_line);
         render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        render_pass.draw(0..self.num_verticies, 0..1);
+        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
+        // render_pass.draw(0..self.num_verticies, 0..1);
+
 
         drop(render_pass);
 
