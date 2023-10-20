@@ -12,7 +12,7 @@ use wasm_bindgen::prelude::*;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct Vertex {
+pub struct Vertex {
     position: [f32; 3],
     color: [f32; 3],
 }
@@ -30,35 +30,48 @@ impl Vertex {
     }
 }
 
-
-
-static VERTICES: &[Vertex] = &[
-    Vertex { position: [-0.5, 0.0, 0.0], color: [0.5, 0.0, 0.5] }, // A
-    Vertex { position: [0.0, 0.0, 0.0], color: [0.5, 0.0, 0.5] }, // B
-    Vertex { position: [0.0, 0.5, 0.0], color: [0.5, 0.0, 0.5] }, // C
-    Vertex { position: [-0.5, 0.5, 0.0], color: [0.5, 0.0, 0.5] }, // D
-    // Vertex { position: [0.44147372, 0.2347359, 0.0], color: [0.5, 0.0, 0.5] }, // E
-];
-
-const INDICES: &[u16] = &[
-    0, 1, 2,
-    0, 2, 3,
-];
+pub fn create_shape(vertices: u16, color: Option<[f32; 3]>) -> (Vec<Vertex>, Vec<u16>) {
+    let angle = std::f32::consts::PI * 2.0 / vertices as f32;
+    let new_vertices: Vec<Vertex> = (0..vertices)
+        .map(|i| {
+            let theta = angle * i as f32;
+            Vertex {
+                position: [0.5 * theta.cos(), -0.5 * theta.sin(), 0.0],
+                color: match color {
+                    Some(color) => color,
+                    None => [(1.0 + theta.cos()) / 2.0, (1.0 + theta.sin()) / 2.0, 1.0],
+                },
+            }
+        })
+        .collect();
+    let triangles = vertices - 2;
+    let indices: Vec<u16> = (1u16..triangles + 1)
+        .flat_map(|i| vec![i + 1, i, 0])
+        .collect();
+    (new_vertices, indices)
+}
 
 struct State {
+    window: Window,
+    size: winit::dpi::PhysicalSize<u32>,
     surface: wgpu::Surface,
+    config: wgpu::SurfaceConfiguration,
     device: wgpu::Device,
     queue: wgpu::Queue,
-    config: wgpu::SurfaceConfiguration,
-    size: winit::dpi::PhysicalSize<u32>,
-    window: Window,
-    clear_color: wgpu::Color,
     current_key: ScanCode,
     pipe_line: wgpu::RenderPipeline,
+
+    clear_color: wgpu::Color,
+
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
-    num_verticies: u32,
     num_indices: u32,
+
+    other_vertex_buffer: wgpu::Buffer,
+    other_index_buffer: wgpu::Buffer,
+    other_num_indices: u32,
+
+    other: bool,
 }
 
 impl State {
@@ -143,8 +156,8 @@ impl State {
             layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "vs_main", // 1.
-                buffers: &[Vertex::desc()],           // 2.
+                entry_point: "vs_main",     // 1.
+                buffers: &[Vertex::desc()], // 2.
             },
             fragment: Some(wgpu::FragmentState {
                 // 3.
@@ -179,22 +192,37 @@ impl State {
             multiview: None, // 5.
         });
 
+        let (verts, ind) = create_shape(3, Some([0.0, 0.0, 0.1]));
+        let num_indices = ind.len() as u32;
+
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("vertex buffer"),
-            contents: bytemuck::cast_slice(VERTICES),
+            contents: bytemuck::cast_slice(&verts),
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        let index_buffer = device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("Index Buffer"),
-                contents: bytemuck::cast_slice(INDICES),
-                usage: wgpu::BufferUsages::INDEX,
-            }
-        );
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Index Buffer"),
+            contents: bytemuck::cast_slice(&ind),
+            usage: wgpu::BufferUsages::INDEX,
+        });
 
-        let num_vertices = VERTICES.len() as u32;
-        let num_indices = INDICES.len() as u32;
+        let (new_vertices, new_indices) = create_shape(100, None);
+        let indices = new_indices.len() as u32;
+
+        let other_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("other buffer"),
+            contents: bytemuck::cast_slice(&new_vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        let other_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("other index"),
+            contents: bytemuck::cast_slice(&new_indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
+        // let other_num_indicies = OTHER_INDICES.len() as u32;
 
         Self {
             surface,
@@ -211,10 +239,13 @@ impl State {
             },
             current_key: 0,
             pipe_line: render_pipeline,
-            vertex_buffer,
+            vertex_buffer: vertex_buffer,
             index_buffer: index_buffer,
-            num_verticies: num_vertices,
             num_indices: num_indices,
+            other_vertex_buffer: other_vertex_buffer,
+            other_index_buffer: other_index_buffer,
+            other_num_indices: indices,
+            other: false,
         }
     }
 
@@ -246,6 +277,12 @@ impl State {
                 true
             }
             WindowEvent::KeyboardInput { input, .. } => {
+                match input.virtual_keycode {
+                    Some(VirtualKeyCode::Space) => {
+                        self.other = input.state == ElementState::Pressed
+                    }
+                    _ => (),
+                };
                 self.current_key = input.scancode;
                 true
             }
@@ -284,11 +321,22 @@ impl State {
         });
 
         render_pass.set_pipeline(&self.pipe_line);
-        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-        render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
-        // render_pass.draw(0..self.num_verticies, 0..1);
+        let data = if self.other {
+            (&self.vertex_buffer, &self.index_buffer, self.num_indices)
+        } else {
+            (
+                &self.other_vertex_buffer,
+                &self.other_index_buffer,
+                self.other_num_indices,
+            )
+        };
 
+        // render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        // render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        // render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
+        render_pass.set_vertex_buffer(0, data.0.slice(..));
+        render_pass.set_index_buffer(data.1.slice(..), wgpu::IndexFormat::Uint16);
+        render_pass.draw_indexed(0..data.2, 0, 0..1);
 
         drop(render_pass);
 
@@ -318,7 +366,7 @@ pub async fn run() {
         // Winit prevents sizing with CSS, so we have to set
         // the size manually when on web.
         use winit::dpi::PhysicalSize;
-        window.set_inner_size(PhysicalSize::new(900, 500));
+        window.set_inner_size(PhysicalSize::new(500, 500));
 
         use winit::platform::web::WindowExtWebSys;
         web_sys::window()

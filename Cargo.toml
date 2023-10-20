@@ -16,6 +16,12 @@ wasm-bindgen-futures = "0.4.30"
 wgpu = "0.17.1"
 winit = "0.28.7"
 
+# jpeg encoder of the image crate is not supported by WASM at the moment
+[dependencies.image]
+version = "0.24.7"
+default-features = false
+features = ["png", "jpeg"]
+
 [lib]
 crate-type = ["cdylib", "rlib"]
 
